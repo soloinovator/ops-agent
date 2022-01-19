@@ -14,6 +14,8 @@
 
 package fluentbit
 
+var LogsPort = "28475"
+
 type Service struct {
 	// Allowed log levels are: error, warn, info, debug, and trace.
 	LogLevel string
@@ -35,7 +37,7 @@ func (s Service) Component() Component {
 			// Enable a built-in HTTP server that can be used to query internal information and monitor metrics of each running plugin.
 			"HTTP_Server": "On",
 			"HTTP_Listen": "0.0.0.0",
-			"HTTP_PORT":   "2020",
+			"HTTP_PORT":   LogsPort,
 
 			// Use the legacy DNS resolver mechanism to work around b/206549605 temporarily.
 			"dns.resolver": "legacy",
