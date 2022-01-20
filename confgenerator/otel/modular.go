@@ -22,6 +22,8 @@ import (
 	"github.com/mitchellh/mapstructure"
 )
 
+var MetricsPort = "59713"
+
 // Pipeline represents a single OT receiver and zero or more processors that must be chained after that receiver.
 type Pipeline struct {
 	Receiver   Component
@@ -77,6 +79,12 @@ func (c ModularConfig) Generate() (string, error) {
 	exporters := map[string]interface{}{}
 	pipelines := map[string]interface{}{}
 	service := map[string]interface{}{
+		// FIXME this is a temporary provision for a new port instead of default 8888.
+		"telemetry": map[string]interface{}{
+			"metrics": map[string]interface{}{
+				"address": fmt.Sprintf(":%s", MetricsPort),
+			},
+		},
 		"pipelines": pipelines,
 	}
 	if c.LogLevel != "info" {

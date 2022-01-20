@@ -16,8 +16,6 @@ package confgenerator
 
 import "github.com/GoogleCloudPlatform/ops-agent/confgenerator/otel"
 
-var MetricsPort = "59713"
-
 // MetricsReceiverAgent provides the agent.googleapis.com/agent/ metrics.
 // It is never referenced in the config file, and instead is forcibly added in confgenerator.go.
 // Therefore, it does not need to implement any interfaces.
@@ -36,7 +34,7 @@ func (r MetricsReceiverAgent) Pipeline() otel.Pipeline {
 						"scrape_interval": "1m",
 						"static_configs": []map[string]interface{}{{
 							// TODO(b/196990135): Customization for the port number
-							"targets": []string{"0.0.0.0:" + MetricsPort},
+							"targets": []string{"0.0.0.0:" + otel.MetricsPort},
 						}},
 					}},
 				},
