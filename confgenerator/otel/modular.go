@@ -87,16 +87,18 @@ func (c ModularConfig) Generate() (string, error) {
 	service := map[string]interface{}{
 		"pipelines": pipelines,
 	}
-	service["telemetry"] = serviceTelemetryConfig{}
+
+	telemetryConfig := serviceTelemetryConfig{}
+	telemetryConfig.Logs = nil
 	if c.LogLevel != "info" {
-		service["telemetry"].Logs = map[string]interface{}{
+		telemetryConfig.Logs = map[string]interface{}{
 			"level": c.LogLevel,
 		}
 	}
-	service["telemetry"].Metrics = map[string]interface{}{
+	telemetryConfig.Metrics = map[string]interface{}{
 		"address": fmt.Sprintf(":%s", MetricsPort),
-	},
-
+	}
+	service["telemetry"] = telemetryConfig
 
 	configMap := map[string]interface{}{
 		"receivers":  receivers,
