@@ -57,6 +57,12 @@ func configToYaml(config interface{}) ([]byte, error) {
 	return yaml.Marshal(outMap)
 }
 
+// FIXME this is a temporary provision for a new port instead of default 8888.
+type serviceTelemetryConfig struct {
+	Logs    map[string]interface{} `yaml:"logs"`
+	Metrics map[string]interface{} `yaml:"metrics"`
+}
+
 type ModularConfig struct {
 	LogLevel  string
 	Pipelines map[string]Pipeline
@@ -79,21 +85,18 @@ func (c ModularConfig) Generate() (string, error) {
 	exporters := map[string]interface{}{}
 	pipelines := map[string]interface{}{}
 	service := map[string]interface{}{
-		// FIXME this is a temporary provision for a new port instead of default 8888.
-		"telemetry": map[string]interface{}{
-			"metrics": map[string]interface{}{
-				"address": fmt.Sprintf(":%s", MetricsPort),
-			},
-		},
 		"pipelines": pipelines,
 	}
+	service["telemetry"] = serviceTelemetryConfig{}
 	if c.LogLevel != "info" {
-		service["telemetry"] = map[string]interface{}{
-			"logs": map[string]interface{}{
-				"level": c.LogLevel,
-			},
+		service["telemetry"].Logs = map[string]interface{}{
+			"level": c.LogLevel,
 		}
 	}
+	service["telemetry"].Metrics = map[string]interface{}{
+		"address": fmt.Sprintf(":%s", MetricsPort),
+	},
+
 
 	configMap := map[string]interface{}{
 		"receivers":  receivers,
