@@ -6,7 +6,7 @@
 	url = ../../fluent/fluent-bit.git
 [submodule "submodules/opentelemetry-operations-collector"]
 	path = submodules/opentelemetry-operations-collector
-	url = ../../braydonk/opentelemetry-operations-collector.git
+	url = ../../GoogleCloudPlatform/opentelemetry-operations-collector.git
 [submodule "submodules/opentelemetry-java-contrib"]
 	path = submodules/opentelemetry-java-contrib
 	url = ../../open-telemetry/opentelemetry-java-contrib.git
