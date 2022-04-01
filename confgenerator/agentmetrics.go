@@ -109,8 +109,8 @@ func (r AgentSelfMetrics) LoggingSubmodulePipeline() otel.Pipeline {
 				"strict",
 				"fluentbit_uptime",
 				"fluentbit_stackdriver_requests_total",
-				"fluentbit_output_proc_records_total",
-				"fluentbit_output_retried_records_total",
+				"fluentbit_stackdriver_retried_records_total",
+				"fluentbit_stackdriver_proc_records_total",
 			),
 			otel.MetricsTransform(
 				otel.RenameMetric("fluentbit_uptime", "agent/uptime",
@@ -126,12 +126,12 @@ func (r AgentSelfMetrics) LoggingSubmodulePipeline() otel.Pipeline {
 					otel.RenameLabel("status", "response_code"),
 					otel.AggregateLabels("sum"),
 				),
-				otel.RenameMetric("fluentbit_output_proc_records_total", "agent/log_entry_count",
+				otel.RenameMetric("fluentbit_stackdriver_proc_records_total", "agent/log_entry_count",
 					// change data type from double -> int64
 					otel.ToggleScalarDataType,
 					otel.AggregateLabels("sum"),
 				),
-				otel.RenameMetric("fluentbit_output_retried_records_total", "agent/log_entry_retry_count",
+				otel.RenameMetric("fluentbit_stackdriver_retried_records_total", "agent/log_entry_retry_count",
 					// change data type from double -> int64
 					otel.ToggleScalarDataType,
 					otel.AggregateLabels("sum"),
