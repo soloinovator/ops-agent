@@ -35,7 +35,7 @@ func (r MetricsReceiverHbase) Type() string {
 	return "hbase"
 }
 
-func (r MetricsReceiverHbase) Pipelines() []otel.ReceiverPipeline {
+func (r MetricsReceiverHbase) Pipelines(_ context.Context) ([]otel.ReceiverPipeline, error) {
 	targetSystem := "hbase"
 	if r.MetricsReceiverSharedCollectJVM.ShouldCollectJVMMetrics() {
 		targetSystem = fmt.Sprintf("%s,%s", targetSystem, "jvm")
@@ -91,7 +91,7 @@ func (p LoggingProcessorHbaseSystem) Components(ctx context.Context, tag string,
 			{
 				StateName: "start_state",
 				NextState: "cont",
-				Regex:     `\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}\,\d{3,6}`,
+				Regex:     `^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}\,\d{3,6}`,
 			},
 			{
 				StateName: "cont",

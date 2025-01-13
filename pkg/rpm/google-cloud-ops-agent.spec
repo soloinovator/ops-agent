@@ -23,6 +23,7 @@ BuildRequires: systemd
 %else
 BuildRequires: systemd-rpm-macros
 %endif
+Requires: rsyslog
 Conflicts: stackdriver-agent, google-fluentd
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root
 
@@ -38,7 +39,7 @@ The Google Cloud Ops Agent collects metrics and logs from the system.
 %install
 cd %{_sourcedir}
 build_distro=%{dist}
-CODE_VERSION=%{version} BUILD_DISTRO=${build_distro#.} DESTDIR="%{buildroot}" ./build.sh
+BUILD_DISTRO=${build_distro#.} DESTDIR="%{buildroot}" ./build.sh
 
 %files
 %config %{_confdir}/config.yaml
@@ -48,6 +49,7 @@ CODE_VERSION=%{version} BUILD_DISTRO=${build_distro#.} DESTDIR="%{buildroot}" ./
 # platforms, but the build.sh script hard-codes libexec.
 %{_prefix}/libexec/google_cloud_ops_agent_engine
 %{_prefix}/libexec/google_cloud_ops_agent_diagnostics
+%{_prefix}/libexec/google_cloud_ops_agent_wrapper
 %{_unitdir}/%{name}*
 %{_unitdir}-preset/*-%{name}*
 

@@ -17,8 +17,12 @@ package confgenerator
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/GoogleCloudPlatform/ops-agent/confgenerator/fluentbit"
+	"github.com/GoogleCloudPlatform/ops-agent/confgenerator/otel"
+	"github.com/GoogleCloudPlatform/ops-agent/internal/platform"
 )
 
 const InstrumentationSourceLabel = `labels."logging.googleapis.com/instrumentation_source"`
@@ -44,8 +48,27 @@ func setLogNameComponents(ctx context.Context, tag, logName, receiverType string
 	}.Components(ctx, tag, "setlogname")
 }
 
+func otelSetLogNameComponents(ctx context.Context, logName, hostName string) []otel.Component {
+	components, err := LoggingProcessorModifyFields{
+		Fields: map[string]*ModifyField{
+			// TODO: Prepend `receiver_id.` if it already exists, like the `fluent_forward` receiver?
+			"logName": {
+				DefaultValue: &logName,
+			},
+			`labels."compute.googleapis.com/resource_name"`: {
+				DefaultValue: &hostName,
+			},
+		},
+	}.Processors(ctx)
+	if err != nil {
+		// We're generating a hard-coded config, so this should never fail.
+		panic(err)
+	}
+	return components
+}
+
 // stackdriverOutputComponent generates a component that outputs logs matching the regex `match` using `userAgent`.
-func stackdriverOutputComponent(match, userAgent string, storageLimitSize string) fluentbit.Component {
+func stackdriverOutputComponent(ctx context.Context, match, userAgent, storageLimitSize, compress string) fluentbit.Component {
 	config := map[string]string{
 		// https://docs.fluentbit.io/manual/pipeline/outputs/stackdriver
 		"Name":              "stackdriver",
@@ -70,9 +93,26 @@ func stackdriverOutputComponent(match, userAgent string, storageLimitSize string
 		// Mute these errors until https://github.com/fluent/fluent-bit/issues/4473 is fixed.
 		"net.connect_timeout_log_error": "False",
 	}
+	if r := platform.FromContext(ctx).ResourceOverride; r != nil {
+		mr := r.MonitoredResource()
+		var labels []string
+		for k, v := range mr.Labels {
+			labels = append(labels, fmt.Sprintf("%s=%s", k, v))
+		}
+		sort.Strings(labels)
+		config["resource"] = mr.Type
+		config["resource_labels"] = strings.Join(labels, ",")
+	}
 
 	if storageLimitSize != "" {
+		// Limit the maximum number of fluent-bit chunks in the filesystem for the current
+		// output logical destination.
 		config["storage.total_limit_size"] = storageLimitSize
+	}
+
+	if compress != "" {
+		// Add payload compression
+		config["compress"] = compress
 	}
 
 	return fluentbit.Component{

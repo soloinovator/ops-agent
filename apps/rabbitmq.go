@@ -20,6 +20,7 @@ import (
 	"github.com/GoogleCloudPlatform/ops-agent/confgenerator"
 	"github.com/GoogleCloudPlatform/ops-agent/confgenerator/fluentbit"
 	"github.com/GoogleCloudPlatform/ops-agent/confgenerator/otel"
+	"github.com/GoogleCloudPlatform/ops-agent/internal/secret"
 )
 
 type LoggingProcessorRabbitmq struct {
@@ -99,7 +100,7 @@ func (r LoggingReceiverRabbitmq) Components(ctx context.Context, tag string) []f
 		{
 			StateName: "start_state",
 			NextState: "cont",
-			Regex:     `\d+-\d+-\d+ \d+:\d+:\d+\.\d+\+\d+:\d+`,
+			Regex:     `^\d+-\d+-\d+ \d+:\d+:\d+\.\d+\+\d+:\d+`,
 		},
 		{
 			StateName: "cont",
@@ -122,9 +123,9 @@ type MetricsReceiverRabbitmq struct {
 	confgenerator.MetricsReceiverShared    `yaml:",inline"`
 	confgenerator.MetricsReceiverSharedTLS `yaml:",inline"`
 
-	Password string `yaml:"password" validate:"required"`
-	Username string `yaml:"username" validate:"required"`
-	Endpoint string `yaml:"endpoint" validate:"omitempty,url"`
+	Password secret.String `yaml:"password" validate:"required"`
+	Username string        `yaml:"username" validate:"required"`
+	Endpoint string        `yaml:"endpoint" validate:"omitempty,url"`
 }
 
 const defaultRabbitmqTCPEndpoint = "http://localhost:15672"
@@ -133,7 +134,7 @@ func (r MetricsReceiverRabbitmq) Type() string {
 	return "rabbitmq"
 }
 
-func (r MetricsReceiverRabbitmq) Pipelines() []otel.ReceiverPipeline {
+func (r MetricsReceiverRabbitmq) Pipelines(_ context.Context) ([]otel.ReceiverPipeline, error) {
 	if r.Endpoint == "" {
 		r.Endpoint = defaultRabbitmqTCPEndpoint
 	}
@@ -142,7 +143,7 @@ func (r MetricsReceiverRabbitmq) Pipelines() []otel.ReceiverPipeline {
 		"collection_interval": r.CollectionIntervalString(),
 		"endpoint":            r.Endpoint,
 		"username":            r.Username,
-		"password":            r.Password,
+		"password":            r.Password.SecretValue(),
 		"tls":                 r.TLSConfig(true),
 	}
 
@@ -163,7 +164,7 @@ func (r MetricsReceiverRabbitmq) Pipelines() []otel.ReceiverPipeline {
 			),
 			otel.ModifyInstrumentationScope(r.Type(), "1.0"),
 		}},
-	}}
+	}}, nil
 }
 
 func init() {

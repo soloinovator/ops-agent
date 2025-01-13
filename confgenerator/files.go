@@ -20,8 +20,6 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
-
-	"github.com/GoogleCloudPlatform/ops-agent/confgenerator/resourcedetector"
 )
 
 // ReadUnifiedConfigFromFile reads the user config file and returns a UnifiedConfig.
@@ -35,7 +33,7 @@ func ReadUnifiedConfigFromFile(ctx context.Context, path string) (*UnifiedConfig
 		return nil, fmt.Errorf("failed to retrieve the user config file %q: %w \n", path, err)
 	}
 
-	data, err := ioutil.ReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -57,23 +55,16 @@ func (uc *UnifiedConfig) GenerateFilesFromConfig(ctx context.Context, service, l
 			return fmt.Errorf("can't parse configuration: %w", err)
 		}
 		for name, contents := range files {
-			if err = writeConfigFile([]byte(contents), filepath.Join(outDir, name)); err != nil {
+			if err = WriteConfigFile([]byte(contents), filepath.Join(outDir, name)); err != nil {
 				return err
 			}
 		}
 	case "otel":
-		// Fetch resource information from the metadata server.
-		var err error
-		MetadataResource, err = resourcedetector.GetResource()
-		if err != nil {
-			return fmt.Errorf("can't get resource metadata: %w", err)
-		}
-
 		otelConfig, err := uc.GenerateOtelConfig(ctx)
 		if err != nil {
 			return fmt.Errorf("can't parse configuration: %w", err)
 		}
-		if err = writeConfigFile([]byte(otelConfig), filepath.Join(outDir, "otel.yaml")); err != nil {
+		if err = WriteConfigFile([]byte(otelConfig), filepath.Join(outDir, "otel.yaml")); err != nil {
 			return err
 		}
 	default:
@@ -82,7 +73,7 @@ func (uc *UnifiedConfig) GenerateFilesFromConfig(ctx context.Context, service, l
 	return nil
 }
 
-func writeConfigFile(content []byte, path string) error {
+func WriteConfigFile(content []byte, path string) error {
 	// Make sure the directory exists before writing the file.
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("failed to create directory for %q: %w", path, err)

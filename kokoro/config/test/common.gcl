@@ -2,22 +2,12 @@ import '../utils/functions.gcl' as functions
 
 template config common = {
   params = {
-    platforms = external
     build_file = external
 
     artifacts = []
 
     environment = {
       PROJECT = 'stackdriver-test-143416'
-      // Note: if we ever need to change regions, we will need to set up a new
-      // Cloud Router and Cloud NAT gateway for that region. This is because
-      // we use --no-address on Kokoro, because of b/169084857.
-      // The new Cloud NAT gateway must have "Minimum ports per VM instance"
-      // set to something >160 as per this article:
-      // https://www.suse.com/support/kb/doc/?id=000019662
-      ZONE = 'us-central1-b'
-
-      PLATFORMS = join(platforms, ',')
     }
   }
 
@@ -37,7 +27,7 @@ template config go_test = common {
   params {
     test_suite = external
 
-    build_file = 'unified_agents/kokoro/scripts/test/go_test_for_containers.sh'
+    build_file = 'unified_agents/kokoro/scripts/test/go_test.sh'
 
     environment {
       TEST_SUITE_NAME = test_suite

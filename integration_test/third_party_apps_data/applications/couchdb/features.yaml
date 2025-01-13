@@ -1,9 +1,0 @@
-features:
-- feature: receivers:couchdb
-  module: metrics
-  key: "[0].enabled"
-  value: true
-- feature: receivers:couchdb
-  module: logging
-  key: "[0].enabled"
-  value: true

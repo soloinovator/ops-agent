@@ -1,3 +1,17 @@
+// Copyright 2024 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package confgenerator
 
 import (
@@ -16,18 +30,22 @@ type Test struct {
 }
 
 type Primitives struct {
-	String                string  `yaml:"string" tracking:""`
-	StringWithoutTracking string  `yaml:"stringWithoutTracking"`
-	StringWithOverride    string  `yaml:"stringWithOverride" tracking:"override"`
-	Bool                  bool    `yaml:"bool"`
-	Ptr                   *bool   `yaml:"ptr"`
-	PtrWithOverride       *bool   `yaml:"ptrWithOverride" tracking:"override"`
-	Int                   int     `yaml:"int"`
-	IntWithExclusion      int     `yaml:"int" tracking:"-"`
-	Struct                Nested  `yaml:"struct" tracking:"override"`
-	Inline                Nested  `yaml:",inline"`
-	Invalid               Nested  `yaml:",inline" tracking:"override"`
-	PtrToStruct           *Nested `yaml:"ptrStruct" tracking:"override"`
+	String                          string  `yaml:"string" tracking:""`
+	StringWithoutTracking           string  `yaml:"stringWithoutTracking"`
+	StringWithOverride              string  `yaml:"stringWithOverride" tracking:"override"`
+	Bool                            bool    `yaml:"bool"`
+	Ptr                             *bool   `yaml:"ptr"`
+	PtrWithOverride                 *bool   `yaml:"ptrWithOverride" tracking:"override"`
+	Int                             int     `yaml:"int"`
+	IntWithExclusion                int     `yaml:"int" tracking:"-"`
+	Struct                          Nested  `yaml:"struct" tracking:"override"`
+	Inline                          Nested  `yaml:",inline"`
+	Invalid                         Nested  `yaml:",inline" tracking:"override"`
+	PtrToStruct                     *Nested `yaml:"ptrStruct" tracking:"override"`
+	unexportedString                string  `yaml:"-" tracking:""`
+	unexportedStringWithoutTracking string  `yaml:"-"`
+	unexportedBool                  bool    `yaml:"-"`
+	unexportedBoolWithExclusion     bool    `yaml:"-" tracking:"-"`
 }
 
 type Maps struct {
@@ -357,6 +375,34 @@ func TestBed(t *testing.T) {
 					Value: "override",
 				},
 			},
+		},
+		{
+			Name: "UnexportedString",
+			Config: Primitives{
+				unexportedString: "foo",
+			},
+			Expected: nil,
+		},
+		{
+			Name: "UnexportedStringWithoutTracking",
+			Config: Primitives{
+				unexportedStringWithoutTracking: "foo",
+			},
+			Expected: nil,
+		},
+		{
+			Name: "UnexportedBool",
+			Config: Primitives{
+				unexportedBool: true,
+			},
+			Expected: nil,
+		},
+		{
+			Name: "UnexportedBoolWithExclusion",
+			Config: Primitives{
+				unexportedBoolWithExclusion: true,
+			},
+			Expected: nil,
 		},
 		{
 			Name: "MapIntWithAutoTracking",

@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -25,6 +26,8 @@ import (
 	"github.com/GoogleCloudPlatform/ops-agent/apps"
 	"github.com/GoogleCloudPlatform/ops-agent/confgenerator"
 	"github.com/GoogleCloudPlatform/ops-agent/internal/healthchecks"
+	"github.com/GoogleCloudPlatform/ops-agent/internal/logs"
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/debug"
 	"golang.org/x/sys/windows/svc/eventlog"
@@ -56,7 +59,10 @@ func (s *service) Execute(args []string, r <-chan svc.ChangeRequest, changes cha
 	defer cancel()
 	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown
 	changes <- svc.Status{State: svc.StartPending}
-	if err := s.parseFlags(args); err != nil {
+
+	allArgs := append([]string{}, os.Args[1:]...)
+	allArgs = append(allArgs, args[1:]...)
+	if err := s.parseFlags(allArgs); err != nil {
 		s.log.Error(EngineEventID, fmt.Sprintf("failed to parse arguments: %v", err))
 		// ERROR_INVALID_ARGUMENT
 		return false, 0x00000057
@@ -68,8 +74,7 @@ func (s *service) Execute(args []string, r <-chan svc.ChangeRequest, changes cha
 		return false, 2
 	}
 	s.log.Info(EngineEventID, "generated configuration files")
-
-	s.runStartupChecks()
+	s.runHealthChecks()
 
 	changes <- svc.Status{State: svc.Running, Accepts: cmdsAccepted}
 	if err := s.startSubagents(); err != nil {
@@ -102,10 +107,7 @@ func (s *service) parseFlags(args []string) error {
 	var fs flag.FlagSet
 	fs.StringVar(&s.userConf, "in", "", "path to the user specified agent config")
 	fs.StringVar(&s.outDirectory, "out", "", "directory to write generated configuration files to")
-
-	allArgs := append([]string{}, os.Args[1:]...)
-	allArgs = append(allArgs, args[1:]...)
-	return fs.Parse(allArgs)
+	return fs.Parse(args)
 }
 
 func (s *service) checkForStandaloneAgents(unified *confgenerator.UnifiedConfig) error {
@@ -138,21 +140,19 @@ func (s *service) checkForStandaloneAgents(unified *confgenerator.UnifiedConfig)
 	return nil
 }
 
-func (s *service) runStartupChecks() {
+func getHealthCheckResults() []healthchecks.HealthCheckResult {
 	logsDir := filepath.Join(os.Getenv("PROGRAMDATA"), dataDirectory, "log")
 	gceHealthChecks := healthchecks.HealthCheckRegistryFactory()
-	logger, closer := healthchecks.CreateHealthChecksLogger(logsDir)
-	defer closer()
+	logger := healthchecks.CreateHealthChecksLogger(logsDir)
 
-	healthCheckResults := gceHealthChecks.RunAllHealthChecks(logger)
-	for _, result := range healthCheckResults {
-		if result.Err != nil {
-			s.log.Error(EngineEventID, result.Message)
-		} else {
-			s.log.Info(EngineEventID, result.Message)
-		}
-	}
-	s.log.Info(EngineEventID, "Startup checks finished")
+	return gceHealthChecks.RunAllHealthChecks(logger)
+}
+
+func (srv *service) runHealthChecks() {
+	healthCheckResults := getHealthCheckResults()
+	logger := logs.WindowsServiceLogger{EventID: EngineEventID, Logger: srv.log}
+	healthchecks.LogHealthCheckResults(healthCheckResults, logger)
+	srv.log.Info(EngineEventID, "Startup checks finished")
 }
 
 func (s *service) generateConfigs(ctx context.Context) error {
@@ -199,7 +199,9 @@ func (s *service) startSubagents() error {
 		defer handle.Close()
 		if err := handle.Start(); err != nil {
 			// TODO: Should we be ignoring failures for partial startup?
-			s.log.Error(EngineEventID, fmt.Sprintf("failed to start %q: %v", svc.name, err))
+			if !errors.Is(err, windows.ERROR_SERVICE_ALREADY_RUNNING) {
+				s.log.Error(EngineEventID, fmt.Sprintf("failed to start %q: %v", svc.name, err))
+			}
 		}
 	}
 	return nil

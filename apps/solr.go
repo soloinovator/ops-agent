@@ -34,7 +34,7 @@ func (r MetricsReceiverSolr) Type() string {
 	return "solr"
 }
 
-func (r MetricsReceiverSolr) Pipelines() []otel.ReceiverPipeline {
+func (r MetricsReceiverSolr) Pipelines(_ context.Context) ([]otel.ReceiverPipeline, error) {
 	targetSystem := "solr"
 
 	return r.MetricsReceiverSharedJVM.
@@ -81,7 +81,7 @@ func (p LoggingProcessorSolrSystem) Components(ctx context.Context, tag string, 
 			{
 				StateName: "start_state",
 				NextState: "cont",
-				Regex:     `\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}\.\d{3}\s[A-z]+\s{1,5}`,
+				Regex:     `^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}\.\d{3}\s[A-z]+\s{1,5}`,
 			},
 			{
 				StateName: "cont",

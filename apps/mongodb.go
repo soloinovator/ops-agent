@@ -23,15 +23,16 @@ import (
 	"github.com/GoogleCloudPlatform/ops-agent/confgenerator/fluentbit"
 	"github.com/GoogleCloudPlatform/ops-agent/confgenerator/fluentbit/modify"
 	"github.com/GoogleCloudPlatform/ops-agent/confgenerator/otel"
+	"github.com/GoogleCloudPlatform/ops-agent/internal/secret"
 )
 
 type MetricsReceiverMongoDB struct {
 	confgenerator.ConfigComponent          `yaml:",inline"`
 	confgenerator.MetricsReceiverSharedTLS `yaml:",inline"`
 	confgenerator.MetricsReceiverShared    `yaml:",inline"`
-	Endpoint                               string `yaml:"endpoint,omitempty"`
-	Username                               string `yaml:"username,omitempty"`
-	Password                               string `yaml:"password,omitempty"`
+	Endpoint                               string        `yaml:"endpoint,omitempty"`
+	Username                               string        `yaml:"username,omitempty"`
+	Password                               secret.String `yaml:"password,omitempty"`
 }
 
 type MetricsReceiverMongoDBHosts struct {
@@ -45,7 +46,7 @@ func (r MetricsReceiverMongoDB) Type() string {
 	return "mongodb"
 }
 
-func (r MetricsReceiverMongoDB) Pipelines() []otel.ReceiverPipeline {
+func (r MetricsReceiverMongoDB) Pipelines(_ context.Context) ([]otel.ReceiverPipeline, error) {
 	transport := "tcp"
 	if r.Endpoint == "" {
 		r.Endpoint = defaultMongodbEndpoint
@@ -63,7 +64,7 @@ func (r MetricsReceiverMongoDB) Pipelines() []otel.ReceiverPipeline {
 	config := map[string]interface{}{
 		"hosts":               hosts,
 		"username":            r.Username,
-		"password":            r.Password,
+		"password":            r.Password.SecretValue(),
 		"collection_interval": r.CollectionIntervalString(),
 	}
 
@@ -83,7 +84,7 @@ func (r MetricsReceiverMongoDB) Pipelines() []otel.ReceiverPipeline {
 			),
 			otel.ModifyInstrumentationScope(r.Type(), "1.0"),
 		}},
-	}}
+	}}, nil
 }
 
 func init() {

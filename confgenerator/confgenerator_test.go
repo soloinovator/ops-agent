@@ -35,8 +35,6 @@ import (
 )
 
 const (
-	validTestdataDirName   = "valid"
-	invalidTestdataDirName = "invalid"
 	builtinTestdataDirName = "builtin"
 	goldenDir              = "golden"
 	errorGolden            = goldenDir + "/error"
@@ -59,10 +57,41 @@ var winlogv1channels = []string{
 }
 
 var (
+	// Set up the test environment with mocked data.
+	testResource = resourcedetector.GCEResource{
+		Project:       "test-project",
+		Zone:          "test-zone",
+		Network:       "test-network",
+		Subnetwork:    "test-subnetwork",
+		PublicIP:      "test-public-ip",
+		PrivateIP:     "test-private-ip",
+		InstanceID:    "test-instance-id",
+		InstanceName:  "test-instance-name",
+		Tags:          "test-tag",
+		MachineType:   "test-machine-type",
+		Metadata:      map[string]string{"test-key": "test-value", "test-escape": "$foo", "test-escape-parentheses": "${foo:bar}"},
+		Label:         map[string]string{"test-label-key": "test-label-value"},
+		InterfaceIPv4: map[string]string{"test-interface": "test-interface-ipv4"},
+	}
+	linuxTestPlatform = platformConfig{
+		name:            "linux",
+		defaultLogsDir:  "/var/log/google-cloud-ops-agent",
+		defaultStateDir: "/var/lib/google-cloud-ops-agent/fluent-bit",
+		platform: platform.Platform{
+			Type: platform.Linux,
+			HostInfo: &host.InfoStat{
+				OS:              "linux",
+				Platform:        "linux_platform",
+				PlatformVersion: "linux_platform_version",
+			},
+			TestGCEResourceOverride: testResource,
+		},
+	}
 	testPlatforms = []platformConfig{
+		linuxTestPlatform,
 		{
-			name:            "linux",
-			defaultLogsDir:  "/var/log/google-cloud-ops-agent/subagents",
+			name:            "linux-gpu",
+			defaultLogsDir:  "/var/log/google-cloud-ops-agent",
 			defaultStateDir: "/var/lib/google-cloud-ops-agent/fluent-bit",
 			platform: platform.Platform{
 				Type: platform.Linux,
@@ -71,6 +100,8 @@ var (
 					Platform:        "linux_platform",
 					PlatformVersion: "linux_platform_version",
 				},
+				TestGCEResourceOverride: testResource,
+				HasNvidiaGpu:            true,
 			},
 		},
 		{
@@ -86,6 +117,7 @@ var (
 					Platform:        "win_platform",
 					PlatformVersion: "win_platform_version",
 				},
+				TestGCEResourceOverride: testResource,
 			},
 		},
 		{
@@ -101,6 +133,7 @@ var (
 					Platform:        "win_platform",
 					PlatformVersion: "win_platform_version",
 				},
+				TestGCEResourceOverride: testResource,
 			},
 		},
 	}
@@ -109,74 +142,68 @@ var (
 func TestGoldens(t *testing.T) {
 	t.Parallel()
 
-	// Iterate platforms inside test directories so the test name hierarchy matches the testdata hierarchy.
-	for _, test := range []struct {
-		dirName      string
-		errAssertion func(t *testing.T, err error, got map[string]string)
-	}{
-		{
-			validTestdataDirName,
-			func(t *testing.T, err error, got map[string]string) {
-				assert.NilError(t, err)
-				delete(got, builtinConfigFileName)
-			},
-		},
-		{
-			invalidTestdataDirName,
-			func(t *testing.T, err error, got map[string]string) {
-				assert.Assert(t, err != nil, "expected test config to be invalid, but was successful")
-				// Error is checked by runTestsInDir
-				delete(got, builtinConfigFileName)
-			},
-		},
-		{
-			builtinTestdataDirName,
-			nil,
-		},
-	} {
-		test := test
-		t.Run(test.dirName, func(t *testing.T) {
-			t.Parallel()
-			for _, pc := range testPlatforms {
-				pc := pc
-				t.Run(pc.name, func(t *testing.T) {
-					t.Parallel()
-					runTestsInDir(
-						t,
-						pc,
-						test.dirName,
-						test.errAssertion,
-					)
-				})
-			}
-		})
-	}
-}
-
-func runTestsInDir(
-	t *testing.T,
-	pc platformConfig,
-	testTypeDir string,
-	errAssertion func(*testing.T, error, map[string]string),
-) {
-	platformTestDir := filepath.Join(testTypeDir, pc.name)
-	testNames := getTestsInDir(t, platformTestDir)
+	goldensDir := "goldens"
+	testNames := getTestsInDir(t, goldensDir)
 
 	for _, testName := range testNames {
 		// https://github.com/golang/go/wiki/CommonMistakes#using-goroutines-on-loop-iterator-variables
 		testName := testName
 		t.Run(testName, func(t *testing.T) {
 			t.Parallel()
-			testDir := filepath.Join(platformTestDir, testName)
-			got, err := generateConfigs(pc, testDir)
-			if errAssertion != nil {
-				errAssertion(t, err, got)
-			}
-			if err := testGeneratedFiles(t, got, testDir); err != nil {
-				t.Errorf("Failed to check generated configs: %v", err)
+			for _, pc := range testPlatforms {
+				pc := pc
+				t.Run(pc.name, func(t *testing.T) {
+					testDir := filepath.Join(goldensDir, testName)
+					got, err := generateConfigs(pc, testDir)
+					if strings.HasPrefix(testName, "invalid-") {
+						assert.Assert(t, err != nil, "expected test config to be invalid, but was successful")
+					}
+					if testName != "builtin" {
+						delete(got, builtinConfigFileName)
+					}
+					if err := testGeneratedFiles(t, got, filepath.Join(testDir, goldenDir, pc.name)); err != nil {
+						t.Errorf("Failed to check generated configs: %v", err)
+					}
+				})
 			}
 		})
 	}
+}
+
+func TestDataprocDefaults(t *testing.T) {
+	t.Parallel()
+
+	goldensDir := "goldens"
+	testName := "builtin"
+	dataprocMetadata := map[string]string{
+		"dataproc-cluster-name": "test-cluster",
+		"dataproc-cluster-uuid": "test-uuid",
+		"dataproc-region":       "test-region",
+	}
+
+	t.Run(testName, func(t *testing.T) {
+		t.Parallel()
+		pc := linuxTestPlatform
+		// Update mocked resource to include Dataproc labels.
+		dataprocResource := testResource
+		newMetadata := map[string]string{}
+		for k, v := range testResource.Metadata {
+			newMetadata[k] = v
+		}
+		for k, v := range dataprocMetadata {
+			newMetadata[k] = v
+		}
+		dataprocResource.Metadata = newMetadata
+		pc.platform.TestGCEResourceOverride = dataprocResource
+		t.Run(pc.name, func(t *testing.T) {
+			testDir := filepath.Join(goldensDir, testName)
+			got, err := generateConfigs(pc, testDir)
+			assert.NilError(t, err, "Failed to generate configs: %v", err)
+			if err := testGeneratedFiles(t, got, filepath.Join(testDir, goldenDir, "linux-dataproc")); err != nil {
+				t.Errorf("Failed to check generated configs: %v", err)
+			}
+		})
+	})
 }
 
 func getTestsInDir(t *testing.T, testDir string) []string {
@@ -208,6 +235,12 @@ func getTestsInDir(t *testing.T, testDir string) []string {
 
 func generateConfigs(pc platformConfig, testDir string) (got map[string]string, err error) {
 	ctx := pc.platform.TestContext(context.Background())
+
+	if features, err := os.ReadFile(filepath.Join("testdata", testDir, "EXPERIMENTAL_FEATURES")); err == nil {
+		ctx = confgenerator.ContextWithExperiments(ctx, confgenerator.ParseExperimentalFeatures(string(features)))
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
 
 	got = make(map[string]string)
 	defer func() {
@@ -284,7 +317,7 @@ func generateConfigs(pc platformConfig, testDir string) (got map[string]string, 
 func testGeneratedFiles(t *testing.T, generatedFiles map[string]string, testDir string) error {
 	// Find all files currently in this test directory
 	existingFiles := map[string]struct{}{}
-	goldenPath := filepath.Join("testdata", testDir, goldenDir)
+	goldenPath := filepath.Join("testdata", testDir)
 	err := filepath.Walk(
 		goldenPath,
 		func(path string, info fs.FileInfo, err error) error {
@@ -298,7 +331,7 @@ func testGeneratedFiles(t *testing.T, generatedFiles map[string]string, testDir 
 		},
 	)
 	if golden.FlagUpdate() && os.IsNotExist(err) {
-		if err := os.Mkdir(goldenPath, 0777); err != nil {
+		if err := os.MkdirAll(goldenPath, 0777); err != nil {
 			return err
 		}
 	} else if err != nil {
@@ -310,7 +343,7 @@ func testGeneratedFiles(t *testing.T, generatedFiles map[string]string, testDir 
 	// If the file is new, the test will fail if not currently doing a golden
 	// update (`-update` flag).
 	for file, content := range generatedFiles {
-		golden.Assert(t, content, filepath.Join(testDir, goldenDir, file))
+		golden.Assert(t, content, filepath.Join(testDir, file))
 		delete(existingFiles, file)
 	}
 
@@ -319,7 +352,7 @@ func testGeneratedFiles(t *testing.T, generatedFiles map[string]string, testDir 
 	// to clean up the existing lua files left aren't being generated anymore.
 	for file := range existingFiles {
 		if golden.FlagUpdate() {
-			err := os.Remove(filepath.Join("testdata", testDir, goldenDir, file))
+			err := os.Remove(filepath.Join("testdata", testDir, file))
 			if err != nil {
 				return err
 			}
@@ -337,28 +370,4 @@ func TestMain(m *testing.M) {
 		return "/path/to/executables/opentelemetry-java-contrib-jmx-metrics.jar", nil
 	}
 	os.Exit(m.Run())
-}
-
-func init() {
-	testResource := resourcedetector.GCEResource{
-		Project:       "test-project",
-		Zone:          "test-zone",
-		Network:       "test-network",
-		Subnetwork:    "test-subnetwork",
-		PublicIP:      "test-public-ip",
-		PrivateIP:     "test-private-ip",
-		InstanceID:    "test-instance-id",
-		InstanceName:  "test-instance-name",
-		Tags:          "test-tag",
-		MachineType:   "test-machine-type",
-		Metadata:      map[string]string{"test-key": "test-value"},
-		Label:         map[string]string{"test-label-key": "test-label-value"},
-		InterfaceIPv4: map[string]string{"test-interface": "test-interface-ipv4"},
-	}
-
-	// Set up the test environment with mocked data.
-	confgenerator.MetadataResource = testResource
-
-	// Enable experimental features.
-	os.Setenv("EXPERIMENTAL_FEATURES", "otlp_receiver")
 }

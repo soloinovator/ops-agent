@@ -22,6 +22,7 @@ import (
 	"github.com/GoogleCloudPlatform/ops-agent/confgenerator"
 	"github.com/GoogleCloudPlatform/ops-agent/confgenerator/fluentbit"
 	"github.com/GoogleCloudPlatform/ops-agent/confgenerator/otel"
+	"github.com/GoogleCloudPlatform/ops-agent/internal/secret"
 )
 
 // MetricsReceiverCouchbase is the struct for ops agent monitoring metrics for couchbase
@@ -29,9 +30,9 @@ type MetricsReceiverCouchbase struct {
 	confgenerator.ConfigComponent       `yaml:",inline"`
 	confgenerator.MetricsReceiverShared `yaml:",inline"`
 
-	Endpoint string `yaml:"endpoint" validate:"omitempty,hostname_port"`
-	Username string `yaml:"username" validate:"required"`
-	Password string `yaml:"password" validate:"required"`
+	Endpoint string        `yaml:"endpoint" validate:"omitempty,hostname_port"`
+	Username string        `yaml:"username" validate:"required"`
+	Password secret.String `yaml:"password" validate:"required"`
 }
 
 const defaultCouchbaseEndpoint = "localhost:8091"
@@ -42,7 +43,7 @@ func (r MetricsReceiverCouchbase) Type() string {
 }
 
 // Pipelines will construct the prometheus receiver configuration
-func (r MetricsReceiverCouchbase) Pipelines() []otel.ReceiverPipeline {
+func (r MetricsReceiverCouchbase) Pipelines(_ context.Context) ([]otel.ReceiverPipeline, error) {
 	targets := []string{r.Endpoint}
 	if r.Endpoint == "" {
 		targets = []string{defaultCouchbaseEndpoint}
@@ -56,7 +57,7 @@ func (r MetricsReceiverCouchbase) Pipelines() []otel.ReceiverPipeline {
 					"scrape_interval": r.CollectionIntervalString(),
 					"basic_auth": map[string]interface{}{
 						"username": r.Username,
-						"password": r.Password,
+						"password": r.Password.SecretValue(),
 					},
 					"metric_relabel_configs": []map[string]interface{}{
 						{
@@ -162,7 +163,7 @@ func (r MetricsReceiverCouchbase) Pipelines() []otel.ReceiverPipeline {
 			otel.TransformationMetrics(r.transformMetrics()...),
 			otel.ModifyInstrumentationScope(r.Type(), "1.0"),
 		}},
-	}}
+	}}, nil
 }
 
 type couchbaseMetric struct {
@@ -210,7 +211,7 @@ var metrics = map[string]couchbaseMetric{
 }
 
 func (r MetricsReceiverCouchbase) transformMetrics() []otel.TransformQuery {
-	operations := []otel.TransformQuery{}
+	queries := []otel.TransformQuery{}
 
 	// persisting order so config generation is non-random
 	keys := []string{}
@@ -222,11 +223,11 @@ func (r MetricsReceiverCouchbase) transformMetrics() []otel.TransformQuery {
 	for _, metricName := range keys {
 		m := metrics[metricName]
 		if m.castToSum {
-			operations = append(operations, otel.ConvertGaugeToSum(metricName))
+			queries = append(queries, otel.ConvertGaugeToSum(metricName))
 		}
-		operations = append(operations, otel.SetDescription(metricName, m.description), otel.SetUnit(metricName, m.unit))
+		queries = append(queries, otel.SetDescription(metricName, m.description), otel.SetUnit(metricName, m.unit))
 	}
-	return operations
+	return queries
 }
 
 func init() {
