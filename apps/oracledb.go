@@ -24,6 +24,7 @@ import (
 	"github.com/GoogleCloudPlatform/ops-agent/confgenerator"
 	"github.com/GoogleCloudPlatform/ops-agent/confgenerator/fluentbit"
 	"github.com/GoogleCloudPlatform/ops-agent/confgenerator/otel"
+	"github.com/GoogleCloudPlatform/ops-agent/internal/secret"
 )
 
 type MetricsReceiverOracleDB struct {
@@ -33,9 +34,9 @@ type MetricsReceiverOracleDB struct {
 	Insecure           *bool `yaml:"insecure" validate:"omitempty"`
 	InsecureSkipVerify *bool `yaml:"insecure_skip_verify" validate:"omitempty"`
 
-	Endpoint string `yaml:"endpoint" validate:"omitempty,hostname_port|startswith=/"`
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
+	Endpoint string        `yaml:"endpoint" validate:"omitempty,hostname_port|startswith=/"`
+	Username string        `yaml:"username"`
+	Password secret.String `yaml:"password"`
 
 	SID         string `yaml:"sid" validate:"omitempty"`
 	ServiceName string `yaml:"service_name" validate:"omitempty"`
@@ -48,7 +49,7 @@ func (r MetricsReceiverOracleDB) Type() string {
 	return "oracledb"
 }
 
-func (r MetricsReceiverOracleDB) Pipelines() []otel.ReceiverPipeline {
+func (r MetricsReceiverOracleDB) Pipelines(_ context.Context) ([]otel.ReceiverPipeline, error) {
 	endpoint := r.Endpoint
 	if r.Endpoint == "" {
 		endpoint = defaultOracleDBEndpoint
@@ -75,8 +76,9 @@ func (r MetricsReceiverOracleDB) Pipelines() []otel.ReceiverPipeline {
 	}
 
 	auth := url.QueryEscape(r.Username)
-	if len(r.Password) > 0 {
-		auth = fmt.Sprintf("%s:%s", auth, url.QueryEscape(r.Password))
+	secretPassword := r.Password.SecretValue()
+	if len(secretPassword) > 0 {
+		auth = fmt.Sprintf("%s:%s", auth, url.QueryEscape(secretPassword))
 	}
 
 	// create a datasource in the form oracle://username:password@host:port/ServiceName?SID=sid&ssl=enable&...
@@ -91,7 +93,7 @@ func (r MetricsReceiverOracleDB) Pipelines() []otel.ReceiverPipeline {
 		"collection_interval": r.CollectionIntervalString(),
 		"driver":              "oracle",
 		"datasource":          datasource,
-		"queries":             r.queryConfig(),
+		"queries":             sqlReceiverQueriesConfig(oracleQueries),
 	}
 	return []otel.ReceiverPipeline{{
 		Receiver: otel.Component{
@@ -115,60 +117,10 @@ func (r MetricsReceiverOracleDB) Pipelines() []otel.ReceiverPipeline {
 			),
 			otel.ModifyInstrumentationScope(r.Type(), "1.0"),
 		}},
-	}}
+	}}, nil
 }
 
-type oracleMetric struct {
-	metric_name       string
-	value_column      string
-	unit              string
-	description       string
-	data_type         string
-	monotonic         string
-	value_type        string
-	attribute_columns []string
-	static_attributes map[string]string
-}
-
-type oracleQuery struct {
-	query   string
-	metrics []oracleMetric
-}
-
-func (r MetricsReceiverOracleDB) queryConfig() []map[string]interface{} {
-	cfg := []map[string]interface{}{}
-	for _, q := range oracleQueries {
-		metrics := []map[string]interface{}{}
-		for _, m := range q.metrics {
-			metric := map[string]interface{}{
-				"metric_name":       m.metric_name,
-				"value_column":      m.value_column,
-				"unit":              m.unit,
-				"description":       m.description,
-				"data_type":         m.data_type,
-				"value_type":        m.value_type,
-				"attribute_columns": m.attribute_columns,
-				"static_attributes": m.static_attributes,
-			}
-			if m.data_type == "sum" {
-				metric["monotonic"] = m.monotonic
-			}
-
-			metrics = append(metrics, metric)
-		}
-
-		query := map[string]interface{}{
-			"sql":     q.query,
-			"metrics": metrics,
-		}
-
-		cfg = append(cfg, query)
-	}
-
-	return cfg
-}
-
-var oracleQueries = []oracleQuery{
+var oracleQueries = []sqlReceiverQuery{
 	{
 		query: `SELECT (SELECT DBID FROM SYS.GV_$$DATABASE) DATABASE_ID, (SELECT GLOBAL_NAME FROM sys.GLOBAL_NAME) GLOBAL_NAME, ts.TABLESPACE_NAME, ts.CONTENTS,
 				(select sum(df.bytes) from sys.dba_data_files df where df.tablespace_name=ts.tablespace_name)-(select sum(fs.bytes) from sys.dba_free_space fs where fs.tablespace_name=ts.tablespace_name) AS USED_SPACE,
@@ -185,14 +137,14 @@ var oracleQueries = []oracleQuery{
 			JOIN sys.v_$$tempfile t
 			ON t.TS# = ss.TS#
 			GROUP BY ts.NAME`,
-		metrics: []oracleMetric{
+		metrics: []sqlReceiverMetric{
 			{
 				metric_name:       "oracle.tablespace.size",
 				value_column:      "FREE_SPACE",
 				unit:              "by",
 				description:       "The size of tablespaces in the database.",
 				data_type:         "sum",
-				monotonic:         "false",
+				monotonic:         false,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "TABLESPACE_NAME", "CONTENTS"},
 				static_attributes: map[string]string{
@@ -206,7 +158,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "by",
 				description:       "The size of tablespaces in the database.",
 				data_type:         "sum",
-				monotonic:         "false",
+				monotonic:         false,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "TABLESPACE_NAME", "CONTENTS"},
 				static_attributes: map[string]string{
@@ -218,14 +170,14 @@ var oracleQueries = []oracleQuery{
 	},
 	{
 		query: "SELECT (SELECT DBID FROM SYS.GV_$$DATABASE) DATABASE_ID, (SELECT GLOBAL_NAME FROM sys.GLOBAL_NAME) GLOBAL_NAME, CONTENTS, STATUS, COUNT(*) COUNT FROM sys.dba_tablespaces GROUP BY STATUS, CONTENTS",
-		metrics: []oracleMetric{
+		metrics: []sqlReceiverMetric{
 			{
 				metric_name:       "oracle.tablespace.count",
 				value_column:      "COUNT",
 				unit:              "{tablespaces}",
 				description:       "The number of tablespaces in the database.",
 				data_type:         "sum",
-				monotonic:         "false",
+				monotonic:         false,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "STATUS", "CONTENTS"},
 				static_attributes: map[string]string{
@@ -237,14 +189,14 @@ var oracleQueries = []oracleQuery{
 	// remove uptime until there is a consistent plan for support
 	// {
 	// 	query: "SELECT (SELECT DBID FROM SYS.GV_$$DATABASE) DATABASE_ID, (SELECT GLOBAL_NAME FROM sys.GLOBAL_NAME) GLOBAL_NAME, INST_ID INSTANCE_ID, INSTANCE_ROLE, (sysdate - startup_time) * 86400 UPTIME FROM SYS.GV_$$instance",
-	// 	metrics: []oracleMetric{
+	// 	metrics: []sqlReceiverMetric{
 	// 		{
 	// 			metric_name:       "oracle.uptime",
 	// 			value_column:      "UPTIME",
 	// 			unit:              "s",
 	// 			description:       "The number of seconds the instance has been up.",
 	// 			data_type:         "sum",
-	// 			monotonic:         "true",
+	// 			monotonic:         true,
 	// 			value_type:        "int",
 	// 			attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID", "INSTANCE_ROLE"},
 	// 			static_attributes: map[string]string{
@@ -255,14 +207,14 @@ var oracleQueries = []oracleQuery{
 	// },
 	{
 		query: "SELECT (SELECT DBID FROM SYS.GV_$$DATABASE) DATABASE_ID, (SELECT GLOBAL_NAME FROM sys.GLOBAL_NAME) GLOBAL_NAME, (SELECT round(case when max(start_time) is null then -1 when sysdate - max(start_time) > 0 then (sysdate - max(start_time)) * 86400 else 0 end) FROM SYS.V_$$rman_backup_job_details ) LATEST_BACKUP FROM DUAL",
-		metrics: []oracleMetric{
+		metrics: []sqlReceiverMetric{
 			{
 				metric_name:       "oracle.backup.latest",
 				value_column:      "LATEST_BACKUP",
 				unit:              "s",
 				description:       "The number of seconds since the last RMAN backup.",
 				data_type:         "sum",
-				monotonic:         "true",
+				monotonic:         true,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME"},
 				static_attributes: map[string]string{
@@ -287,14 +239,14 @@ var oracleQueries = []oracleQuery{
 				)
 			)
 			GROUP BY DATABASE_ID, GLOBAL_NAME, INST_ID`,
-		metrics: []oracleMetric{
+		metrics: []sqlReceiverMetric{
 			{
 				metric_name:       "oracle.process.count",
 				value_column:      "PROCESSES_UTIL",
 				unit:              "{processes}",
 				description:       "The current number of processes.",
 				data_type:         "sum",
-				monotonic:         "false",
+				monotonic:         false,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID"},
 				static_attributes: map[string]string{
@@ -307,7 +259,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "{processes}",
 				description:       "The maximum number of processes allowed.",
 				data_type:         "sum",
-				monotonic:         "false",
+				monotonic:         false,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID"},
 				static_attributes: map[string]string{
@@ -320,7 +272,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "{sessions}",
 				description:       "The current number of sessions.",
 				data_type:         "sum",
-				monotonic:         "false",
+				monotonic:         false,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID"},
 				static_attributes: map[string]string{
@@ -333,7 +285,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "{sessions}",
 				description:       "The maximum number of sessions allowed.",
 				data_type:         "sum",
-				monotonic:         "false",
+				monotonic:         false,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID"},
 				static_attributes: map[string]string{
@@ -344,14 +296,14 @@ var oracleQueries = []oracleQuery{
 	},
 	{
 		query: "SELECT (SELECT DBID FROM SYS.GV_$$DATABASE) DATABASE_ID, (SELECT GLOBAL_NAME FROM sys.GLOBAL_NAME) GLOBAL_NAME, INST_ID INSTANCE_ID, PROGRAM, SUM(PGA_USED_MEM) USED_MEM, SUM(PGA_ALLOC_MEM) - SUM(PGA_USED_MEM) FREE_MEM FROM SYS.GV_$$PROCESS WHERE PROGRAM <> 'PSEUDO' GROUP BY PROGRAM, INST_ID",
-		metrics: []oracleMetric{
+		metrics: []sqlReceiverMetric{
 			{
 				metric_name:       "oracle.process.pga_memory.size",
 				value_column:      "USED_MEM",
 				unit:              "by",
 				description:       "The programmable global area memory allocated by process.",
 				data_type:         "sum",
-				monotonic:         "false",
+				monotonic:         false,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID", "PROGRAM"},
 				static_attributes: map[string]string{
@@ -365,7 +317,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "by",
 				description:       "The programmable global area memory allocated by process.",
 				data_type:         "sum",
-				monotonic:         "false",
+				monotonic:         false,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID", "PROGRAM"},
 				static_attributes: map[string]string{
@@ -377,14 +329,14 @@ var oracleQueries = []oracleQuery{
 	},
 	{
 		query: "SELECT (SELECT DBID FROM SYS.GV_$$DATABASE) DATABASE_ID, (SELECT GLOBAL_NAME FROM sys.GLOBAL_NAME) GLOBAL_NAME, INST_ID INSTANCE_ID, WAIT_CLASS, SUM(total_waits_fg) AS TOTAL_WAITS_FG, SUM(total_waits)-SUM(total_waits_fg) AS TOTAL_WAITS_BG, SUM(total_timeouts_fg) AS TOTAL_TIMEOUTS_FG, SUM(total_timeouts)-SUM(TOTAL_TIMEOUTS_FG) AS TOTAL_TIMEOUTS_BG, SUM(time_waited_fg) AS TIME_WAITED_FG, SUM(time_waited)-SUM(TIME_WAITED_FG) AS TIME_WAITED_BG FROM SYS.GV_$$system_event WHERE wait_class <> 'Idle' GROUP BY INST_ID, WAIT_CLASS",
-		metrics: []oracleMetric{
+		metrics: []sqlReceiverMetric{
 			{
 				metric_name:       "oracle.wait.count",
 				value_column:      "TOTAL_WAITS_FG",
 				unit:              "{events}",
 				description:       "The number of wait events experienced.",
 				data_type:         "sum",
-				monotonic:         "true",
+				monotonic:         true,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID", "WAIT_CLASS"},
 				static_attributes: map[string]string{
@@ -398,7 +350,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "{events}",
 				description:       "The number of wait events experienced.",
 				data_type:         "sum",
-				monotonic:         "true",
+				monotonic:         true,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID", "WAIT_CLASS"},
 				static_attributes: map[string]string{
@@ -412,7 +364,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "cs",
 				description:       "The amount of time waited for wait events.",
 				data_type:         "sum",
-				monotonic:         "true",
+				monotonic:         true,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID", "WAIT_CLASS"},
 				static_attributes: map[string]string{
@@ -426,7 +378,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "cs",
 				description:       "The amount of time waited for wait events.",
 				data_type:         "sum",
-				monotonic:         "true",
+				monotonic:         true,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID", "WAIT_CLASS"},
 				static_attributes: map[string]string{
@@ -440,7 +392,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "{timeouts}",
 				description:       "The number of timeouts for wait events.",
 				data_type:         "sum",
-				monotonic:         "true",
+				monotonic:         true,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID", "WAIT_CLASS"},
 				static_attributes: map[string]string{
@@ -454,7 +406,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "{timeouts}",
 				description:       "The number of timeouts for wait events.",
 				data_type:         "sum",
-				monotonic:         "true",
+				monotonic:         true,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID", "WAIT_CLASS"},
 				static_attributes: map[string]string{
@@ -481,7 +433,7 @@ var oracleQueries = []oracleQuery{
 				)
 			)
 			GROUP BY DATABASE_ID, GLOBAL_NAME, INST_ID`,
-		metrics: []oracleMetric{
+		metrics: []sqlReceiverMetric{
 			{
 				metric_name:       "oracle.service.response_time",
 				value_column:      "RESPONSE_TIME",
@@ -552,14 +504,14 @@ var oracleQueries = []oracleQuery{
 				)
 			)
 			GROUP BY DATABASE_ID, GLOBAL_NAME, INST_ID`,
-		metrics: []oracleMetric{
+		metrics: []sqlReceiverMetric{
 			{
 				metric_name:       "oracle.cursor.count",
 				value_column:      "CURSORS_CUMULATIVE",
 				unit:              "{cursors}",
 				description:       "The total number of cursors.",
 				data_type:         "sum",
-				monotonic:         "true",
+				monotonic:         true,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID"},
 				static_attributes: map[string]string{
@@ -572,7 +524,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "{cursors}",
 				description:       "The current number of cursors.",
 				data_type:         "sum",
-				monotonic:         "false",
+				monotonic:         false,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID"},
 				static_attributes: map[string]string{
@@ -585,7 +537,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "{logons}",
 				description:       "The total number of logons.",
 				data_type:         "sum",
-				monotonic:         "true",
+				monotonic:         true,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID"},
 				static_attributes: map[string]string{
@@ -598,7 +550,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "{logons}",
 				description:       "The current number of logons.",
 				data_type:         "sum",
-				monotonic:         "false",
+				monotonic:         false,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID"},
 				static_attributes: map[string]string{
@@ -611,7 +563,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "{sorts}",
 				description:       "The total number of sorts.",
 				data_type:         "sum",
-				monotonic:         "true",
+				monotonic:         true,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID"},
 				static_attributes: map[string]string{
@@ -623,9 +575,9 @@ var oracleQueries = []oracleQuery{
 				metric_name:       "oracle.sort.count",
 				value_column:      "SORTS_DISK",
 				unit:              "{sorts}",
-				description:       "The total number of sorts. ",
+				description:       "The total number of sorts.",
 				data_type:         "sum",
-				monotonic:         "true",
+				monotonic:         true,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID"},
 				static_attributes: map[string]string{
@@ -639,7 +591,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "{rows}",
 				description:       "The total number of rows sorted.",
 				data_type:         "sum",
-				monotonic:         "true",
+				monotonic:         true,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID"},
 				static_attributes: map[string]string{
@@ -652,7 +604,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "{operations}",
 				description:       "The number of physical disk operations.",
 				data_type:         "sum",
-				monotonic:         "true",
+				monotonic:         true,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID"},
 				static_attributes: map[string]string{
@@ -666,7 +618,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "by",
 				description:       "The number of bytes affected by physical disk operations.",
 				data_type:         "sum",
-				monotonic:         "true",
+				monotonic:         true,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID"},
 				static_attributes: map[string]string{
@@ -680,7 +632,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "{operations}",
 				description:       "The number of physical disk operations.",
 				data_type:         "sum",
-				monotonic:         "true",
+				monotonic:         true,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID"},
 				static_attributes: map[string]string{
@@ -694,7 +646,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "by",
 				description:       "The number of bytes affected by physical disk operations.",
 				data_type:         "sum",
-				monotonic:         "true",
+				monotonic:         true,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID"},
 				static_attributes: map[string]string{
@@ -708,7 +660,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "by",
 				description:       "The total number of bytes communicated on the network.",
 				data_type:         "sum",
-				monotonic:         "true",
+				monotonic:         true,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID"},
 				static_attributes: map[string]string{
@@ -723,7 +675,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "by",
 				description:       "The total number of bytes communicated on the network.",
 				data_type:         "sum",
-				monotonic:         "true",
+				monotonic:         true,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID"},
 				static_attributes: map[string]string{
@@ -738,7 +690,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "by",
 				description:       "The total number of bytes communicated on the network.",
 				data_type:         "sum",
-				monotonic:         "true",
+				monotonic:         true,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID"},
 				static_attributes: map[string]string{
@@ -753,7 +705,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "by",
 				description:       "The total number of bytes communicated on the network.",
 				data_type:         "sum",
-				monotonic:         "true",
+				monotonic:         true,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID"},
 				static_attributes: map[string]string{
@@ -768,7 +720,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "{calls}",
 				description:       "The total number of user calls such as login, parse, fetch, or execute.",
 				data_type:         "sum",
-				monotonic:         "true",
+				monotonic:         true,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID"},
 				static_attributes: map[string]string{
@@ -781,7 +733,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "{commits}",
 				description:       "The total number of user transaction commits.",
 				data_type:         "sum",
-				monotonic:         "true",
+				monotonic:         true,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID"},
 				static_attributes: map[string]string{
@@ -794,7 +746,7 @@ var oracleQueries = []oracleQuery{
 				unit:              "{rollbacks}",
 				description:       "The total number of times users manually issue the ROLLBACK statement or an error occurs during a user's transactions",
 				data_type:         "sum",
-				monotonic:         "true",
+				monotonic:         true,
 				value_type:        "int",
 				attribute_columns: []string{"DATABASE_ID", "GLOBAL_NAME", "INSTANCE_ID"},
 				static_attributes: map[string]string{

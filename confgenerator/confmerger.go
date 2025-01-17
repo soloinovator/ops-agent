@@ -17,6 +17,7 @@ package confgenerator
 
 import (
 	"context"
+	"log"
 
 	"github.com/GoogleCloudPlatform/ops-agent/internal/platform"
 )
@@ -41,14 +42,14 @@ func MergeConfFiles(ctx context.Context, userConfPath string, builtInConfStructs
 		mergeConfigs(result, overrides)
 	}
 
-	if err := result.Validate(); err != nil {
+	if err := result.Validate(ctx); err != nil {
 		return nil, err
 	}
 
 	// Ensure the merged config struct fields are valid.
 	v := newValidator()
-	if err := v.Struct(result); err != nil {
-		panic(err)
+	if err := v.StructCtx(ctx, result); err != nil {
+		log.Fatalf("merged config failed to validate: %v", err)
 	}
 	return result, nil
 }
@@ -57,6 +58,7 @@ func mergeConfigs(original, overrides *UnifiedConfig) {
 	// built-in configs do not contain these sections.
 	original.Combined = overrides.Combined
 	original.Traces = overrides.Traces
+	original.Global = overrides.Global
 
 	// For "default_pipeline", we go one level deeper.
 	// this covers 2 cases:
@@ -84,6 +86,10 @@ func mergeConfigs(original, overrides *UnifiedConfig) {
 		if overrides.Logging.Service != nil {
 			if overrides.Logging.Service.LogLevel != "info" {
 				original.Logging.Service.LogLevel = overrides.Logging.Service.LogLevel
+			}
+			original.Logging.Service.OTelLogging = overrides.Logging.Service.OTelLogging
+			if overrides.Logging.Service.Compress != "" {
+				original.Logging.Service.Compress = overrides.Logging.Service.Compress
 			}
 			for name, pipeline := range overrides.Logging.Service.Pipelines {
 				// skips logging.service.pipelines.*.exporters

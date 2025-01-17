@@ -1,0 +1,38 @@
+# Configures Ops Agent to collect telemetry from the app and restart Ops Agent.
+
+set -e
+
+# Create a back up of the existing file so existing configurations are not lost.
+sudo cp /etc/google-cloud-ops-agent/config.yaml /etc/google-cloud-ops-agent/config.yaml.bak
+
+# Configure the Ops Agent.
+sudo tee /etc/google-cloud-ops-agent/config.yaml > /dev/null << EOF
+metrics:
+  receivers:
+    cassandra:
+      type: cassandra
+      endpoint: service:jmx:rmi:///jndi/rmi://127.0.0.1:7199/jmxrmi
+  service:
+    pipelines:
+      cassandra:
+        receivers:
+          - cassandra
+logging:
+  receivers:
+    cassandra_system:
+      type: cassandra_system
+    cassandra_debug:
+      type: cassandra_debug
+    cassandra_gc:
+      type: cassandra_gc
+  service:
+    pipelines:
+      cassandra:
+        receivers:
+          - cassandra_system
+          - cassandra_debug
+          - cassandra_gc
+EOF
+
+sudo service google-cloud-ops-agent restart
+sleep 60

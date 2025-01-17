@@ -34,7 +34,7 @@ func (MetricsReceiverFlink) Type() string {
 
 const defaultFlinkEndpoint = "http://localhost:8081"
 
-func (r MetricsReceiverFlink) Pipelines() []otel.ReceiverPipeline {
+func (r MetricsReceiverFlink) Pipelines(_ context.Context) ([]otel.ReceiverPipeline, error) {
 	if r.Endpoint == "" {
 		r.Endpoint = defaultFlinkEndpoint
 	}
@@ -65,7 +65,7 @@ func (r MetricsReceiverFlink) Pipelines() []otel.ReceiverPipeline {
 			),
 			otel.ModifyInstrumentationScope(r.Type(), "1.0"),
 		}},
-	}}
+	}}, nil
 }
 
 func init() {
@@ -106,7 +106,7 @@ func (p LoggingProcessorFlink) Components(ctx context.Context, tag string, uid s
 			{
 				StateName: "start_state",
 				NextState: "cont",
-				Regex:     `\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d+`,
+				Regex:     `^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d+`,
 			},
 			{
 				StateName: "cont",

@@ -1,9 +1,0 @@
-features:
-- feature: receivers:varnish
-  module: metrics
-  key: "[0].enabled"
-  value: true
-- feature: receivers:varnish
-  module: logging
-  key: "[0].enabled"
-  value: true

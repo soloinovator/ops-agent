@@ -15,6 +15,7 @@
 package apps
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
@@ -26,29 +27,50 @@ import (
 type MetricsProcessorExcludeMetrics struct {
 	confgenerator.ConfigComponent `yaml:",inline"`
 
-	MetricsPattern []string `yaml:"metrics_pattern,flow" validate:"dive,endswith=/*,startswith=agent.googleapis.com/"`
+	MetricsPattern []string `yaml:"metrics_pattern,flow"`
 }
 
 func (p MetricsProcessorExcludeMetrics) Type() string {
 	return "exclude_metrics"
 }
 
-func (p MetricsProcessorExcludeMetrics) Processors() []otel.Component {
+func (p MetricsProcessorExcludeMetrics) Processors(_ context.Context) ([]otel.Component, error) {
 	var metricNames []string
 	for _, glob := range p.MetricsPattern {
 		// $ needs to be escaped because reasons.
 		// https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/processor/metricstransformprocessor#rename-multiple-metrics-using-substitution
-		var literals []string
-		for _, g := range strings.Split(glob, "*") {
-			literals = append(literals, strings.Replace(regexp.QuoteMeta(g), "$", "$$", -1))
-		}
-		metricNames = append(metricNames, fmt.Sprintf(`^%s$$`, strings.Join(literals, `.*`)))
+		metricNames = append(metricNames, strings.Replace(globToRegex(glob), "$", "$$", -1))
 	}
 	return []otel.Component{otel.MetricsFilter(
 		"exclude",
 		"regexp",
 		metricNames...,
-	)}
+	)}, nil
+}
+
+// globToRegex converts metrics glob patterns to regex patterns
+func globToRegex(glob string) string {
+	var literals []string
+	for _, g := range strings.Split(glob, "*") {
+		literals = append(literals, regexp.QuoteMeta(g))
+	}
+	return fmt.Sprintf(`^%s$`, strings.Join(literals, `.*`))
+
+}
+
+// AllMetricsExcluded checks if its MetricsPattern list can match all of the
+// input metrics which would indicate all of the metrics will be excluded
+func (p MetricsProcessorExcludeMetrics) AllMetricsExcluded(metrics ...string) bool {
+OUTER:
+	for _, metric := range metrics {
+		for _, excludePattern := range p.MetricsPattern {
+			if r, _ := regexp.MatchString(globToRegex(excludePattern), metric); r {
+				continue OUTER
+			}
+		}
+		return false
+	}
+	return true
 }
 
 func init() {

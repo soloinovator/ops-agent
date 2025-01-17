@@ -15,15 +15,94 @@
 package healthchecks
 
 import (
-	"log"
+	"context"
+	"errors"
 	"net/http"
+	"time"
+
+	"github.com/GoogleCloudPlatform/ops-agent/internal/logs"
+	"github.com/GoogleCloudPlatform/ops-agent/internal/platform"
+	"github.com/cenkalti/backoff/v4"
 )
 
+const MaxRequestElapsedTime = 30 * time.Second
+
+type networkRequest struct {
+	name             string
+	url              string
+	successMessage   string
+	healthCheckError HealthCheckError
+}
+
 var (
-	// API urls
-	loggingAPIUrl    = "https://logging.googleapis.com/$discovery/rest"
-	monitoringAPIUrl = "https://monitoring.googleapis.com/$discovery/rest"
+	commonRequests = []networkRequest{
+		{
+			name:             "Logging API",
+			url:              "https://logging.googleapis.com/$discovery/rest",
+			successMessage:   "Request to the Logging API was successful.",
+			healthCheckError: LogApiConnErr,
+		},
+		{
+			name:             "Monitoring API",
+			url:              "https://monitoring.googleapis.com/$discovery/rest",
+			successMessage:   "Request to the Monitoring API was successful.",
+			healthCheckError: MonApiConnErr,
+		},
+		{
+			name: "Packages API",
+			// We don't really care that the thing being fetched is an RPM key, just
+			// that we *can* fetch it at all, regardless of what distro we're running
+			// under.
+			url:              "https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg",
+			successMessage:   "Request to packages.cloud.google.com was successful.",
+			healthCheckError: PacApiConnErr,
+		},
+		{
+			name:             "dl.google.com",
+			url:              "https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh",
+			successMessage:   "Request to dl.google.com was successful.",
+			healthCheckError: DLApiConnErr,
+		},
+	}
+	gceRequests = []networkRequest{
+		{
+			name:             "GCE Metadata Server",
+			url:              "http://metadata.google.internal",
+			successMessage:   "Request to the GCE Metadata server was successful.",
+			healthCheckError: MetaApiConnErr,
+		},
+	}
 )
+
+func (r networkRequest) SendRequest(logger logs.StructuredLogger) error {
+	var response *http.Response
+	var err error
+	bf := backoff.NewExponentialBackOff()
+	bf.MaxElapsedTime = MaxRequestElapsedTime
+	expTicker := backoff.NewTicker(bf)
+
+	for range expTicker.C {
+		response, err = http.Get(r.url)
+		if err == nil && response.StatusCode == http.StatusOK {
+			expTicker.Stop()
+			break
+		}
+	}
+	if err != nil {
+		if isTimeoutError(err) || isConnectionRefusedError(err) {
+			return r.healthCheckError
+		}
+		return err
+	}
+	logger.Infof("%s response status: %s", r.name, response.Status)
+	switch response.StatusCode {
+	case http.StatusOK:
+		logger.Infof(r.successMessage)
+	default:
+		return r.healthCheckError
+	}
+	return nil
+}
 
 type NetworkCheck struct{}
 
@@ -31,38 +110,18 @@ func (c NetworkCheck) Name() string {
 	return "Network Check"
 }
 
-func (c NetworkCheck) RunCheck(logger *log.Logger) error {
-	// Request to logging API
-	response, err := http.Get(loggingAPIUrl)
-	if err != nil {
-		if isTimeoutError(err) || isConnectionRefusedError(err) {
-			return LogApiConnErr
-		}
-		return err
+func (c NetworkCheck) RunCheck(logger logs.StructuredLogger) error {
+	var networkErrors []error
+	ctx := context.TODO()
+	p := platform.FromContext(ctx)
+	for _, r := range commonRequests {
+		networkErrors = append(networkErrors, r.SendRequest(logger))
 	}
-	logger.Printf("Logging API response status: %s", response.Status)
-	switch response.StatusCode {
-	case http.StatusOK:
-		logger.Printf("Request to the Logging API was successful.")
-	default:
-		return LogApiConnErr
+	if p.ResourceOverride == nil || p.ResourceOverride.MonitoredResource().Type == "gce_instance" {
+		for _, r := range gceRequests {
+			networkErrors = append(networkErrors, r.SendRequest(logger))
+		}
 	}
 
-	// Request to monitoring API
-	response, err = http.Get(monitoringAPIUrl)
-	if err != nil {
-		if isTimeoutError(err) || isConnectionRefusedError(err) {
-			return MonApiConnErr
-		}
-		return err
-	}
-	logger.Printf("Monitoring API response status: %s", response.Status)
-	switch response.StatusCode {
-	case http.StatusOK:
-		logger.Printf("Request to the Monitoring API was successful.")
-	default:
-		return MonApiConnErr
-	}
-
-	return nil
+	return errors.Join(networkErrors...)
 }

@@ -36,7 +36,7 @@ func (r MetricsReceiverIis) Type() string {
 	return "iis"
 }
 
-func (r MetricsReceiverIis) Pipelines() []otel.ReceiverPipeline {
+func (r MetricsReceiverIis) Pipelines(_ context.Context) ([]otel.ReceiverPipeline, error) {
 	if r.ReceiverVersion == "2" {
 		return []otel.ReceiverPipeline{{
 			Receiver: otel.Component{
@@ -70,7 +70,7 @@ func (r MetricsReceiverIis) Pipelines() []otel.ReceiverPipeline {
 				otel.NormalizeSums(),
 				otel.ModifyInstrumentationScope(r.Type(), "2.0"),
 			}},
-		}}
+		}}, nil
 	}
 
 	// Return version 1 if version is anything other than 2
@@ -100,7 +100,9 @@ func (r MetricsReceiverIis) Pipelines() []otel.ReceiverPipeline {
 				},
 			},
 		},
-		Type: otel.System,
+		ExporterTypes: map[string]otel.ExporterType{
+			"metrics": otel.System,
+		},
 		Processors: map[string][]otel.Component{"metrics": {
 			otel.MetricsTransform(
 				otel.RenameMetric(
@@ -137,7 +139,7 @@ func (r MetricsReceiverIis) Pipelines() []otel.ReceiverPipeline {
 			otel.NormalizeSums(),
 			otel.ModifyInstrumentationScope(r.Type(), "1.0"),
 		}},
-	}}
+	}}, nil
 }
 
 func init() {
@@ -203,7 +205,7 @@ func (p *LoggingProcessorIisAccess) Components(ctx context.Context, tag, uid str
 	c = append(c, fluentbit.LuaFilterComponents(tag, iisMergeRecordFieldsLuaFunction, iisMergeRecordFieldsLuaScriptContents)...)
 
 	c = append(c, []fluentbit.Component{
-		// This is used to exlude the header lines above the logs
+		// This is used to exclude the header lines above the logs
 
 		// EXAMPLE LINES:
 		// #Software: Microsoft Internet Information Services 10.0

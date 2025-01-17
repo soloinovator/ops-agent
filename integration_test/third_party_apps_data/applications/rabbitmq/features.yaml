@@ -1,9 +1,0 @@
-features:
-- feature: receivers:rabbitmq
-  module: metrics
-  key: "[0].enabled"
-  value: true
-- feature: receivers:rabbitmq
-  module: logging
-  key: "[0].enabled"
-  value: true
