@@ -16,15 +16,19 @@
 package otel
 
 import (
+	"context"
 	"fmt"
 
+	"github.com/GoogleCloudPlatform/ops-agent/internal/platform"
 	yaml "github.com/goccy/go-yaml"
 	"github.com/mitchellh/mapstructure"
+	commonconfig "github.com/prometheus/common/config"
 )
 
 const MetricsPort = 20201
 
 type ExporterType int
+type ResourceDetectionMode int
 
 const (
 	// N.B. Every ExporterType increases the QPS and thus quota
@@ -33,6 +37,11 @@ const (
 	OTel ExporterType = iota
 	System
 	GMP
+)
+const (
+	Override ResourceDetectionMode = iota
+	SetIfMissing
+	None
 )
 
 func (t ExporterType) Name() string {
@@ -52,8 +61,11 @@ type ReceiverPipeline struct {
 	// Processors is a map with processors for each pipeline type ("metrics" or "traces").
 	// If a key is not in the map, the receiver pipeline will not be used for that pipeline type.
 	Processors map[string][]Component
-	// Type indicates if the pipeline outputs special metrics (either Prometheus or system metrics) that need to be handled with a special exporter.
-	Type ExporterType
+	// ExporterTypes indicates if the pipeline outputs special data (either Prometheus or system metrics) that need to be handled with a special exporter.
+	ExporterTypes map[string]ExporterType
+	// ResourceDetectionModes indicates whether the resource should be forcibly set, set only if not already present, or never set.
+	// If a data type is not present, it will assume the zero value (Override).
+	ResourceDetectionModes map[string]ResourceDetectionMode
 }
 
 // Pipeline represents one (of potentially many) pipelines consuming data from a ReceiverPipeline.
@@ -88,7 +100,12 @@ func configToYaml(config interface{}) ([]byte, error) {
 	if err := mapstructure.Decode(config, &outMap); err != nil {
 		return nil, err
 	}
-	return yaml.Marshal(outMap)
+	return yaml.MarshalWithOptions(
+		outMap,
+		yaml.CustomMarshaler[commonconfig.Secret](func(s commonconfig.Secret) ([]byte, error) {
+			return []byte(s), nil
+		}),
+	)
 }
 
 type ModularConfig struct {
@@ -96,13 +113,13 @@ type ModularConfig struct {
 	ReceiverPipelines map[string]ReceiverPipeline
 	Pipelines         map[string]Pipeline
 
-	// GlobalProcessors and Exporter are added at the end of every pipeline.
-	// Only one instance of each will be created regardless of how many pipelines are defined.
-	//
-	// Note: GlobalProcessors are not applied to pipelines with Type == GMP.
-	GlobalProcessors []Component
-
 	Exporters map[ExporterType]Component
+
+	// Test-only options:
+	// Don't generate any self-metrics
+	DisableMetrics bool
+	// Emit collector logs as JSON
+	JSONLogs bool
 }
 
 // Generate an OT YAML config file for c.
@@ -113,7 +130,8 @@ type ModularConfig struct {
 //	receivers: [hostmetrics/mypipe]
 //	processors: [filter/mypipe_1, metrics_filter/mypipe_2, resourcedetection/_global_0]
 //	exporters: [googlecloud]
-func (c ModularConfig) Generate() (string, error) {
+func (c ModularConfig) Generate(ctx context.Context) (string, error) {
+	pl := platform.FromContext(ctx)
 	receivers := map[string]interface{}{}
 	processors := map[string]interface{}{}
 	exporters := map[string]interface{}{}
@@ -121,16 +139,27 @@ func (c ModularConfig) Generate() (string, error) {
 	pipelines := map[string]interface{}{}
 	service := map[string]map[string]interface{}{
 		"pipelines": pipelines,
-		"telemetry": {
+		"telemetry": map[string]interface{}{
 			"metrics": map[string]interface{}{
+				// TODO: switch to metrics.readers so we can stop binding a port
 				"address": fmt.Sprintf("0.0.0.0:%d", MetricsPort),
 			},
 		},
 	}
-	if c.LogLevel != "info" {
-		service["telemetry"]["logs"] = map[string]interface{}{
-			"level": c.LogLevel,
+	if c.DisableMetrics {
+		service["telemetry"]["metrics"] = map[string]interface{}{
+			"level": "none",
 		}
+	}
+	logs := map[string]any{}
+	if c.LogLevel != "info" {
+		logs["level"] = "debug"
+	}
+	if c.JSONLogs {
+		logs["encoding"] = "json"
+	}
+	if len(logs) > 0 {
+		service["telemetry"]["logs"] = logs
 	}
 
 	configMap := map[string]interface{}{
@@ -140,26 +169,20 @@ func (c ModularConfig) Generate() (string, error) {
 		"service":    service,
 	}
 
-	// Check if there are any prometheus receivers in the pipelines.
-	// If so, add the googlemanagedprometheus exporter.
-	for _, r := range c.ReceiverPipelines {
-		if _, ok := exporterNames[r.Type]; !ok {
-			exporter := c.Exporters[r.Type]
-			name := exporter.name(r.Type.Name())
-			exporterNames[r.Type] = name
-			exporters[name] = exporter.Config
-			if r.Type == GMP {
-				// Add the groupbyattrs processor so prometheus pipelines can use it.
-				processors["groupbyattrs/custom_prometheus"] = gceGroupByAttrs().Config
-			}
-		}
+	resourceDetectionProcessors := map[ResourceDetectionMode]Component{
+		Override:     GCPResourceDetector(true),
+		SetIfMissing: GCPResourceDetector(false),
 	}
 
-	var globalProcessorNames []string
-	for i, processor := range c.GlobalProcessors {
-		name := processor.name(fmt.Sprintf("_global_%d", i))
-		globalProcessorNames = append(globalProcessorNames, name)
-		processors[name] = processor.Config
+	if pl.ResourceOverride != nil {
+		resourceDetectionProcessors = map[ResourceDetectionMode]Component{
+			Override:     ResourceTransform(pl.ResourceOverride.OTelResourceAttributes(), true),
+			SetIfMissing: ResourceTransform(pl.ResourceOverride.OTelResourceAttributes(), false),
+		}
+	}
+	resourceDetectionProcessorNames := map[ResourceDetectionMode]string{
+		Override:     resourceDetectionProcessors[Override].name("_global_0"),
+		SetIfMissing: resourceDetectionProcessors[SetIfMissing].name("_global_1"),
 	}
 
 	for prefix, pipeline := range c.Pipelines {
@@ -188,18 +211,23 @@ func (c ModularConfig) Generate() (string, error) {
 			processorNames = append(processorNames, name)
 			processors[name] = processor.Config
 		}
-
-		// TODO: Should globalProcessorNames be appended for non-metrics receivers?
-		if receiverPipeline.Type == GMP {
-			processorNames = append(processorNames, "groupbyattrs/custom_prometheus")
-		} else {
-			processorNames = append(processorNames, globalProcessorNames...)
+		rdm := receiverPipeline.ResourceDetectionModes[pipeline.Type]
+		if name, ok := resourceDetectionProcessorNames[rdm]; ok {
+			processorNames = append(processorNames, name)
+			processors[name] = resourceDetectionProcessors[rdm].Config
+		}
+		exporterType := receiverPipeline.ExporterTypes[pipeline.Type]
+		if _, ok := exporterNames[exporterType]; !ok {
+			exporter := c.Exporters[exporterType]
+			name := exporter.name(exporterType.Name())
+			exporterNames[exporterType] = name
+			exporters[name] = exporter.Config
 		}
 
 		pipelines[pipeline.Type+"/"+prefix] = map[string]interface{}{
 			"receivers":  []string{receiverName},
 			"processors": processorNames,
-			"exporters":  []string{exporterNames[receiverPipeline.Type]},
+			"exporters":  []string{exporterNames[exporterType]},
 		}
 	}
 
@@ -219,13 +247,4 @@ func contains(s []string, str string) bool {
 	}
 
 	return false
-}
-
-func gceGroupByAttrs() Component {
-	return Component{
-		Type: "groupbyattrs",
-		Config: map[string]interface{}{
-			"keys": []string{"namespace", "cluster", "location"},
-		},
-	}
 }

@@ -35,7 +35,7 @@ func (r MetricsReceiverWildfly) Type() string {
 	return "wildfly"
 }
 
-func (r MetricsReceiverWildfly) Pipelines() []otel.ReceiverPipeline {
+func (r MetricsReceiverWildfly) Pipelines(_ context.Context) ([]otel.ReceiverPipeline, error) {
 	targetSystem := "wildfly"
 
 	if r.MetricsReceiverSharedJVM.Endpoint != "" && !strings.HasPrefix(r.MetricsReceiverSharedJVM.Endpoint, "service:jmx") {
@@ -133,7 +133,7 @@ func (r LoggingReceiverWildflySystem) Components(ctx context.Context, tag string
 		{
 			StateName: "start_state",
 			NextState: "cont",
-			Regex:     `\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}`,
+			Regex:     `^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}`,
 		},
 		{
 			StateName: "cont",

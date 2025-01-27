@@ -1,9 +1,0 @@
-features:
-- feature: receivers:flink
-  module: metrics
-  key: "[0].enabled"
-  value: true
-- feature: receivers:flink
-  module: logging
-  key: "[0].enabled"
-  value: true

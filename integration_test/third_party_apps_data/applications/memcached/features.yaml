@@ -1,5 +1,0 @@
-features:
-- feature: receivers:memcached
-  module: metrics
-  key: "[0].enabled"
-  value: true

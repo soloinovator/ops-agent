@@ -15,6 +15,8 @@
 package apps
 
 import (
+	"context"
+
 	"github.com/GoogleCloudPlatform/ops-agent/confgenerator"
 	"github.com/GoogleCloudPlatform/ops-agent/confgenerator/otel"
 	"github.com/GoogleCloudPlatform/ops-agent/internal/platform"
@@ -32,7 +34,7 @@ func (MetricsReceiverMssql) Type() string {
 	return "mssql"
 }
 
-func (m MetricsReceiverMssql) Pipelines() []otel.ReceiverPipeline {
+func (m MetricsReceiverMssql) Pipelines(_ context.Context) ([]otel.ReceiverPipeline, error) {
 	if m.ReceiverVersion == "2" {
 		return []otel.ReceiverPipeline{{
 			Receiver: otel.Component{
@@ -55,7 +57,7 @@ func (m MetricsReceiverMssql) Pipelines() []otel.ReceiverPipeline {
 				otel.NormalizeSums(),
 				otel.ModifyInstrumentationScope(m.Type(), "2.0"),
 			}},
-		}}
+		}}, nil
 	}
 
 	return []otel.ReceiverPipeline{{
@@ -80,7 +82,9 @@ func (m MetricsReceiverMssql) Pipelines() []otel.ReceiverPipeline {
 				},
 			},
 		},
-		Type: otel.System,
+		ExporterTypes: map[string]otel.ExporterType{
+			"metrics": otel.System,
+		},
 		Processors: map[string][]otel.Component{"metrics": {
 			otel.MetricsTransform(
 				otel.RenameMetric(
@@ -99,7 +103,7 @@ func (m MetricsReceiverMssql) Pipelines() []otel.ReceiverPipeline {
 			),
 			otel.ModifyInstrumentationScope(m.Type(), "1.0"),
 		}},
-	}}
+	}}, nil
 }
 
 func init() {

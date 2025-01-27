@@ -15,6 +15,7 @@ package confgenerator_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/csv"
 	"errors"
 	"fmt"
@@ -25,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/GoogleCloudPlatform/ops-agent/apps"
+	_ "github.com/GoogleCloudPlatform/ops-agent/apps"
 	"github.com/GoogleCloudPlatform/ops-agent/confgenerator"
 	"github.com/GoogleCloudPlatform/ops-agent/confgenerator/otel"
 	"github.com/google/go-cmp/cmp"
@@ -53,6 +54,37 @@ var expectedFeatureBase = []confgenerator.Feature{
 		Key:    []string{"default_pipeline_overridden"},
 		Value:  "false",
 	},
+	{
+		Module: "global",
+		Kind:   "default",
+		Type:   "self_log",
+		Key:    []string{"default_self_log_file_collection"},
+		Value:  "true",
+	},
+}
+
+var expectedMetricsPipelineOverriden = []confgenerator.Feature{
+	{
+		Module: "logging",
+		Kind:   "service",
+		Type:   "pipelines",
+		Key:    []string{"default_pipeline_overridden"},
+		Value:  "false",
+	},
+	{
+		Module: "metrics",
+		Kind:   "service",
+		Type:   "pipelines",
+		Key:    []string{"default_pipeline_overridden"},
+		Value:  "true",
+	},
+	{
+		Module: "global",
+		Kind:   "default",
+		Type:   "self_log",
+		Key:    []string{"default_self_log_file_collection"},
+		Value:  "true",
+	},
 }
 
 var expectedTestFeatureBase = []confgenerator.Feature{
@@ -69,6 +101,13 @@ var expectedTestFeatureBase = []confgenerator.Feature{
 		Type:   "pipelines",
 		Key:    []string{"default_pipeline_overridden"},
 		Value:  "false",
+	},
+	{
+		Module: "global",
+		Kind:   "default",
+		Type:   "self_log",
+		Key:    []string{"default_self_log_file_collection"},
+		Value:  "true",
 	},
 	{
 		Module: confgenerator.MetricsReceiverTypes.Subagent,
@@ -171,6 +210,24 @@ func TestBed(t *testing.T) {
 					Value:  "true",
 				},
 			),
+		},
+		{
+			Name: "UnexportedBool",
+			Config: &confgenerator.UnifiedConfig{
+				Metrics: &confgenerator.Metrics{
+					Receivers: map[string]confgenerator.MetricsReceiver{
+						"metricsReceiverFoo": &MetricsReceiverFoo{
+							ConfigComponent: confgenerator.ConfigComponent{
+								Type: "MetricsReceiverFoo",
+							},
+							MetricsReceiverInlineFoo: MetricsReceiverInlineFoo{
+								unexportedBool: true,
+							},
+						},
+					},
+				},
+			},
+			Expected: expectedTestFeatureBase,
 		},
 		{
 			Name: "PointerBool",
@@ -572,14 +629,15 @@ func (m MetricsReceiverFoo) Type() string {
 	return "metricsReceiverFoo"
 }
 
-func (m MetricsReceiverFoo) Pipelines() []otel.ReceiverPipeline {
-	return nil
+func (m MetricsReceiverFoo) Pipelines(_ context.Context) ([]otel.ReceiverPipeline, error) {
+	return nil, nil
 }
 
 type MetricsReceiverInlineFoo struct {
 	StringWithTracking    string                      `yaml:"stringWithTracking" tracking:""`
 	StringWithoutTracking string                      `yaml:"stringWithoutTracking"`
 	Bool                  bool                        `yaml:"bool"`
+	unexportedBool        bool                        `yaml:"-"`
 	Ptr                   *bool                       `yaml:"ptr"`
 	Struct                MetricsReceiverInnerPointer `yaml:"struct" tracking:"override"`
 }
@@ -622,25 +680,8 @@ func TestOverrideDefaultPipeline(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	expected := []confgenerator.Feature{
-		{
-			Module: "logging",
-			Kind:   "service",
-			Type:   "pipelines",
-			Key:    []string{"default_pipeline_overridden"},
-			Value:  "false",
-		},
-		{
-			Module: "metrics",
-			Kind:   "service",
-			Type:   "pipelines",
-			Key:    []string{"default_pipeline_overridden"},
-			Value:  "true",
-		},
-	}
-
-	if !cmp.Equal(features, expected) {
-		t.Fatalf("expected: %v, actual: %v", expected, features)
+	if !cmp.Equal(features, expectedMetricsPipelineOverriden) {
+		t.Fatalf("expected: %v, actual: %v", expectedMetricsPipelineOverriden, features)
 	}
 }
 
@@ -648,10 +689,10 @@ func TestPrometheusFeatureMetrics(t *testing.T) {
 	uc := emptyUc
 	receivers := make(map[string]confgenerator.MetricsReceiver)
 	receivers["prometheus"] = confgenerator.PrometheusMetrics{
-		confgenerator.ConfigComponent{
+		ConfigComponent: confgenerator.ConfigComponent{
 			Type: "prometheus",
 		},
-		promconfig.Config{
+		PromConfig: promconfig.Config{
 			GlobalConfig: promconfig.GlobalConfig{
 				ScrapeInterval:     model.Duration(10 * time.Second),
 				ScrapeTimeout:      model.Duration(10 * time.Second),
@@ -793,11 +834,11 @@ func TestPrometheusFeatureMetrics(t *testing.T) {
 }
 
 func TestGolden(t *testing.T) {
-	_ = apps.BuiltInConfStructs
 	components := confgenerator.LoggingReceiverTypes.GetComponentsFromRegistry()
 	components = append(components, confgenerator.LoggingProcessorTypes.GetComponentsFromRegistry()...)
 	components = append(components, confgenerator.MetricsReceiverTypes.GetComponentsFromRegistry()...)
 	components = append(components, confgenerator.MetricsProcessorTypes.GetComponentsFromRegistry()...)
+	components = append(components, confgenerator.CombinedReceiverTypes.GetComponentsFromRegistry()...)
 
 	features := getFeatures(components)
 
@@ -852,8 +893,8 @@ func getFeaturesForComponent(i interface{}, parent []string) [][]string {
 	for j := 0; j < t.NumField(); j++ {
 		f := t.Field(j)
 		override, ok := f.Tag.Lookup("tracking")
-		if override == "-" {
-			// Skip fields with tracking tag "-".
+		if override == "-" || !f.IsExported() {
+			// Skip fields with tracking tag "-" and unexported fields.
 			continue
 		}
 		switch f.Type.Kind() {
@@ -906,8 +947,8 @@ func (m Example) Type() string {
 	return "example"
 }
 
-func (m Example) Pipelines() []otel.ReceiverPipeline {
-	return nil
+func (m Example) Pipelines(_ context.Context) ([]otel.ReceiverPipeline, error) {
+	return nil, nil
 }
 
 func TestNestedStructs(t *testing.T) {

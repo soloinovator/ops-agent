@@ -27,15 +27,23 @@ import (
 	"go.uber.org/multierr"
 )
 
-//go:embed agent_metrics/metadata.yaml
+//go:embed ops_agent_test/agent_metrics/metadata.yaml
 var agentMetricsMetadata []byte
 
-//go:embed third_party_apps_data/applications
+//go:embed third_party_apps_test/applications
 var thirdPartyDataDir embed.FS
 
 func TestValidateMetadataOfThirdPartyApps(t *testing.T) {
-	err := walkThirdPartyApps(func(contents []byte) error {
-		return metadata.UnmarshalAndValidate(contents, &metadata.IntegrationMetadata{})
+	err := walkThirdPartyApps(func(fullPath string, contents []byte) error {
+		app := path.Base(path.Dir(fullPath))
+		t.Run(app, func(t *testing.T) {
+			t.Parallel()
+			err := metadata.UnmarshalAndValidate(fullPath, contents, &metadata.IntegrationMetadata{})
+			if err != nil {
+				t.Error(err)
+			}
+		})
+		return nil
 	})
 	if err != nil {
 		t.Error(err)
@@ -43,7 +51,7 @@ func TestValidateMetadataOfThirdPartyApps(t *testing.T) {
 }
 
 func TestRequireMetadataForAllThirdPartyApps(t *testing.T) {
-	parentDirectory := "third_party_apps_data/applications"
+	parentDirectory := "third_party_apps_test/applications"
 	dirs, err := thirdPartyDataDir.ReadDir(parentDirectory)
 	if err != nil {
 		t.Fatal(err)
@@ -61,18 +69,19 @@ func TestRequireMetadataForAllThirdPartyApps(t *testing.T) {
 }
 
 func TestThirdPartyPublicUrls(t *testing.T) {
-	err := walkThirdPartyApps(func(contents []byte) error {
-		integrationMetadata := &metadata.IntegrationMetadata{}
-		err := metadata.UnmarshalAndValidate(contents, integrationMetadata)
-		if integrationMetadata.PublicUrl == "" {
-			// The public doc isn't available yet. 
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		t.Run(integrationMetadata.ShortName, func(t *testing.T) {
+	err := walkThirdPartyApps(func(fullPath string, contents []byte) error {
+		app := path.Base(path.Dir(fullPath))
+		t.Run(app, func(t *testing.T) {
 			t.Parallel()
+			integrationMetadata := &metadata.IntegrationMetadata{}
+			err := metadata.UnmarshalAndValidate(fullPath, contents, integrationMetadata)
+			if integrationMetadata.PublicUrl == "" {
+				// The public doc isn't available yet.
+				return
+			}
+			if err != nil {
+				t.Error(err)
+			}
 			r, err := http.Get(integrationMetadata.PublicUrl)
 			if err != nil {
 				t.Error(err)
@@ -89,23 +98,23 @@ func TestThirdPartyPublicUrls(t *testing.T) {
 	}
 }
 
-func walkThirdPartyApps(fn func(contents []byte) error) error {
-	return fs.WalkDir(thirdPartyDataDir, ".", func(path string, info fs.DirEntry, err error) error {
+func walkThirdPartyApps(fn func(app string, contents []byte) error) error {
+	return fs.WalkDir(thirdPartyDataDir, ".", func(fullPath string, info fs.DirEntry, err error) error {
 		if info.Name() != "metadata.yaml" {
 			return nil
 		}
 
-		contents, err := os.ReadFile(path)
+		contents, err := os.ReadFile(fullPath)
 		if err != nil {
 			return err
 		}
-		return fn(contents)
+		return fn(fullPath, contents)
 	})
 }
 
 func TestValidateMetadataOfAgentMetric(t *testing.T) {
 
-	err := metadata.UnmarshalAndValidate(agentMetricsMetadata, &metadata.ExpectedMetricsContainer{})
+	err := metadata.UnmarshalAndValidate("ops_agent_test/agent_metrics/metadata.yaml", agentMetricsMetadata, &metadata.ExpectedMetricsContainer{})
 	if err != nil {
 		t.Error(err)
 	}

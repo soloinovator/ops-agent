@@ -35,7 +35,7 @@ func (r MetricsReceiverKafka) Type() string {
 	return "kafka"
 }
 
-func (r MetricsReceiverKafka) Pipelines() []otel.ReceiverPipeline {
+func (r MetricsReceiverKafka) Pipelines(_ context.Context) ([]otel.ReceiverPipeline, error) {
 	targetSystem := "kafka"
 	return r.MetricsReceiverSharedJVM.
 		WithDefaultEndpoint(defaultKafkaEndpoint).
@@ -108,7 +108,7 @@ func (p LoggingProcessorKafka) Components(ctx context.Context, tag string, uid s
 			{
 				StateName: "start_state",
 				NextState: "cont",
-				Regex:     `\[\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d+\]`,
+				Regex:     `^\[\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d+\]`,
 			},
 			{
 				StateName: "cont",
